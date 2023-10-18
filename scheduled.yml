@@ -1,0 +1,260 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Start and stop EC2, RDS, ECS, etc. at a scheduled time"
+Parameters:
+    ScheduleStopTime:
+        Type: String
+        Default: "cron(0 20 * * ? *)"
+    ScheduleStartTime:
+        Type: String
+        Default: "cron(0 10 ? * * *)"
+    Timezone:
+        Type: String
+        Default: "Asia/Tokyo"
+    InstanceID1:
+        Type: String
+    InstanceID2:
+        Type: String
+    RDSCluster:
+        Type: String
+    RDSInstance:
+        Type: String
+    ECSCluster:
+        Type: String
+    ECSService:
+        Type: String
+Resources:
+# ------------------------------------------------------------#
+# EC2
+# ------------------------------------------------------------#
+    # IAM role
+    EC2SchedulerRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                        Service:
+                          - scheduler.amazonaws.com
+                      Action:
+                        - 'sts:AssumeRole'
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+            RoleName: EC2Scheduler
+            Tags:
+                - Key: Name
+                  Value: EC2Scheduler
+
+    # Start
+    EC2StartSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "ec2-start"
+            Description: ""
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStartTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:ec2:startInstances"
+                Input:
+                    !Sub '{
+                        "InstanceIds": [
+                            "${InstanceID1}",
+                            "${InstanceID2}",
+                        ]
+                    }'
+                RoleArn: !GetAtt EC2SchedulerRole.Arn
+
+    # Stop
+    EC2StopSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "ec2-stop"
+            Description: ""
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStopTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:ec2:stopInstances"
+                Input:
+                    !Sub '{
+                         "InstanceIds": [
+                            "${InstanceID1}",
+                            "${InstanceID2}",
+                        ]
+                    }'
+                RoleArn: !GetAtt EC2SchedulerRole.Arn
+
+
+# ------------------------------------------------------------#
+# RDS
+# ------------------------------------------------------------#
+    # IAM role
+    RDSSchedulerRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                        Service:
+                          - scheduler.amazonaws.com
+                      Action:
+                        - 'sts:AssumeRole'
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
+            RoleName: RDSScheduler
+            Tags:
+                - Key: Name
+                  Value: RDSScheduler
+
+    # Cluster Start
+    RDSClusterStartSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "rds-cluster-start"
+            Description: "Start RDS Cluster"
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStartTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:rds:startDBCluster"
+                Input:
+                    Fn::Sub: '{"DbClusterIdentifier": "${RDSCluster}"}'
+                RoleArn: !GetAtt RDSSchedulerRole.Arn
+
+    # Cluster Stop
+    RDSClusterStopSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "rds-cluster-stop"
+            Description: "Stop RDS Cluster"
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStopTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:rds:stopDBCluster"
+                Input:
+                    Fn::Sub: '{"DbClusterIdentifier": "${RDSCluster}"}'
+                RoleArn: !GetAtt RDSSchedulerRole.Arn
+
+    # Instance Start
+    RDSInstanceStartSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "rds-instance-start"
+            Description: "Start RDS Instance"
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStartTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:rds:startDBInstance"
+                Input:
+                    Fn::Sub: '{"DbInstanceIdentifier": "${RDSInstance}"}'
+                RoleArn: !GetAtt RDSSchedulerRole.Arn
+
+    # Instance Stop
+    RDSInstanceStopSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "rds-instance-stop"
+            Description: "Stop RDS Instance"
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStopTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:rds:stopDBInstance"
+                Input:
+                    Fn::Sub: '{"DbInstanceIdentifier": "${RDSInstance}"}'
+                RoleArn: !GetAtt RDSSchedulerRole.Arn
+
+
+# ------------------------------------------------------------#
+# ECS
+# ------------------------------------------------------------#
+    # IAM role
+    ECSSchedulerRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                        Service:
+                          - scheduler.amazonaws.com
+                      Action:
+                        - 'sts:AssumeRole'
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/AmazonECS_FullAccess"
+            RoleName: ECSScheduler
+            Tags:
+                - Key: Name
+                  Value: ECSScheduler
+
+    # Start
+    ECSStartSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "ecs-start"
+            Description: ""
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStartTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:ecs:updateService"
+                Input:
+                    Fn::Sub: |
+                        {
+                            "Service": "${ECSService}",
+                            "Cluster": "${ECSCluster}",
+                            "DesiredCount": 1
+                        }
+                RoleArn: !GetAtt ECSSchedulerRole.Arn
+
+    # Stop
+    ECSStopSchedule:
+        Type: "AWS::Scheduler::Schedule"
+        Properties:
+            Name: "ecs-stop"
+            Description: ""
+            State: "ENABLED"
+            GroupName: "default"
+            ScheduleExpression: !Ref ScheduleStopTime
+            ScheduleExpressionTimezone: !Ref Timezone
+            FlexibleTimeWindow:
+                Mode: "OFF"
+            Target:
+                Arn: "arn:aws:scheduler:::aws-sdk:ecs:updateService"
+                Input:
+                    Fn::Sub: |
+                        {
+                            "Service": "${ECSService}",
+                            "Cluster": "${ECSCluster}",
+                            "DesiredCount": 1
+                        }
+                # Input: !Sub "{\"Cluster\": \"${ECSCluster}\", \"Service\": \"${ECSService}\", \"DesiredCount\": 0}"
+                RoleArn: !GetAtt ECSSchedulerRole.Arn
