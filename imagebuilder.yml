@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Automate EC2 AMI updates with image builder
+Parameters:
+  ProjectName:
+    Description: "Target instance name"
+    Type: String
+  RecipeVersion:
+    Type: String
+    Default: 1.0.0
+  BaseImage:
+    Description: "ARN of an AWS-managed AMI or ID of a custom AMI"
+    Type: String
+  Schedule:
+    Type: String
+Resources:
+  Recipe:
+    Type: AWS::ImageBuilder::ImageRecipe
+    Properties:
+      Components:
+        - ComponentArn: arn:aws:imagebuilder:ap-northeast-1:aws:component/aws-codedeploy-agent-linux/1.0.3/1
+        - ComponentArn: arn:aws:imagebuilder:ap-northeast-1:aws:component/reboot-test-linux/1.0.0/1
+      Name: !Sub ${ProjectName}-recipe
+      ParentImage: !Ref BaseImage
+      Version: !Ref RecipeVersion
+  InfrastructureConfiguration:
+    Type: AWS::ImageBuilder::InfrastructureConfiguration
+    Properties:
+      InstanceProfileName: EC2InstanceProfileForImageBuilder
+      InstanceTypes: []
+      Name: !Sub ${ProjectName}-infrastructure-configuration
+      SecurityGroupIds: []
+      TerminateInstanceOnFailure: true
+  DistributionConfiguration:
+    Type: AWS::ImageBuilder::DistributionConfiguration
+    Properties:
+      Distributions:
+        - Region: ap-northeast-1
+          AmiDistributionConfiguration:
+            Name: !Sub ${ProjectName}-ami-distribution-configuration - {{ imagebuilder:buildDate }}
+      Name: !Sub ${ProjectName}-distribution-configuration
+  ImageBuilderImagePipeline:
+      Type: "AWS::ImageBuilder::ImagePipeline"
+      Properties:
+          Name: !Sub ${ProjectName}-pipeline
+          ImageRecipeArn: !Ref Recipe
+          InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+          DistributionConfigurationArn: !Ref DistributionConfiguration
+          # ImageTestsConfiguration:
+          #     ImageTestsEnabled: true
+          #     TimeoutMinutes: 720
+          Schedule:
+              ScheduleExpression: !Ref Schedule
+              PipelineExecutionStartCondition: "EXPRESSION_MATCH_ONLY" #スケジュールに基づいて実行
+          Status: "ENABLED"
+  AmiImage:
+    Type: AWS::ImageBuilder::Image
+    Properties:
+      ImageRecipeArn: !Ref Recipe
+      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+      ImageTestsConfiguration:
+        ImageTestsEnabled: true
+        TimeoutMinutes: 60
