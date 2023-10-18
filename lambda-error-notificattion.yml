@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Use AWS Chatbot to notify Slack of errors that have occurred in Lambda"
+Parameters:
+  S3Bucket:
+    Type: String
+  ChannelId:
+    Type: String
+  WorkspaceId:
+    Type: String
+
+Resources:
+# ------------------------------------------------------------#
+# SNS（LambdaのエラーをSlackに転送する）
+# ------------------------------------------------------------#
+  #SNSトピック
+  SNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TopicName: LambdaError
+      Tags:
+      -
+        Key: "Name"
+        Value: LambdaError
+
+
+# ------------------------------------------------------------#
+# LambdaのErrorを監視するCloudWatch Alarm
+# ------------------------------------------------------------#
+  CloudWatchAlarm:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmName: lambda-error-ararm
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref SNSTopic
+      MetricName: "Errors"
+      Namespace: "AWS/Lambda"
+      Dimensions:
+        -
+          Name: "FunctionName"
+          Value: !Ref LambdaFunction
+      Statistic: "Average" #平均
+      Period: 60
+      EvaluationPeriods: 1 #閾値を超えた回数
+      # DatapointsToAlarm: 1 #必要なデータポイントの数
+      Threshold: 1 #閾値
+      ComparisonOperator: "GreaterThanOrEqualToThreshold" #閾値以上
+      TreatMissingData: missing
+
+
+# ------------------------------------------------------------#
+# Lambda関数（LaravelのAPIを叩く）
+# ------------------------------------------------------------#
+  # IAMロール
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: putlog-cloudwatchlogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:PutLogEvents'
+                  - 'sns:*'
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/lambda-function:*" #動的に変更 #注意
+
+  # lambda function
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: lambda-function
+      Role: !GetAtt FunctionRole.Arn
+      Runtime: python3.10
+      Handler: lambda_handler.lambda_handler
+      PackageType: Zip
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: "---------.zip"
+
+  # 失敗時の送信先指定
+  LambdaErrorNotification:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      DestinationConfig:
+        OnFailure:
+          Destination: !Ref SNSTopic
+      FunctionName: !Ref LambdaFunction
+      Qualifier: $LATEST
+
+
+# ------------------------------------------------------------#
+# Chatbot（Slackとの連携）
+# ------------------------------------------------------------#
+  Chatbot:
+    Type: AWS::Chatbot::SlackChannelConfiguration
+    Properties:
+      ConfigurationName: sample-chatbot
+      IamRoleArn: !GetAtt ChatbotIamRole.Arn
+      LoggingLevel: INFO
+      SlackChannelId: !Ref ChannelId
+      SlackWorkspaceId: !Ref WorkspaceId
+      SnsTopicArns:
+        - !Ref SNSTopic
+
+  ChatbotIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AWSChatbot-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: chatbot.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AWS-Chatbot-NotificationsOnly-Policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:Describe*
+                  - cloudwatch:Get*
+                  - cloudwatch:List*
+                  - "logs:*"
+                Resource:
+                  - "*"
