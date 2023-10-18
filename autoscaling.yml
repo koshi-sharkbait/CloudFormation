@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "EC2 AutoscalingGroup"
+Parameters:
+  PJName:
+    Type: String
+  KeyName:
+    Type: String
+  ImageID:
+    Type: AWS::EC2::Image::Id
+  InstanceType:
+    Type: String
+  DesiredCapacity: #最初に起動される台数
+    Type: String
+    Default: 1
+  MinSize:
+    Type: String
+    Default: 1
+  MaxSize:
+    Type: String
+    Default: 3
+  TargetGroupArn:
+    Type: String
+  UseScalingPolicy:
+    Type: String
+    Description: "Enable UseScalingPolicy. true | false"
+
+# UseScalingPolicy Parameters
+  PolicyType:
+    Type: String
+    Description: "TargetTrackingScaling | SetpScaling | SimpleScaling（非推奨） "
+    Default: TargetTrackingScaling
+  PredefinedMetricType:
+    Type: String
+    Description: "ALBRequestCountPerTarget | ASGAverageCPUUtilization | ASGAverageNetworkIn | ASGAverageNetworkOut"
+    Default: ASGAverageCPUUtilization
+  TargetValue:
+    Type: String
+    Description: "Metrics TargetValue"
+    Default: 60
+
+#trueの場合のみスケーリングポリシーを適用させる
+Conditions:
+  SetScalingPolicy:
+    !Equals [!Ref UseScalingPolicy, "true"]
+
+Resources:
+# ------------------------------------------------------------#
+# LaunchTemplate
+# ------------------------------------------------------------#
+  EC2InstanceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${PJName}-LaunchTemplate"
+      LaunchTemplateData:
+        ImageId: !Ref ImageID
+        KeyName: !Ref KeyName
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Name: SimpleEC2InstanceRole
+        UserData:
+          Fn::Base64: |
+              #!/bin/bash
+              sudo yum update -y
+
+# ------------------------------------------------------------#
+# AutoScaling Group
+# ------------------------------------------------------------#
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub "${PJName}-AutoScalingGroup"
+      VPCZoneIdentifier:
+        - !ImportValue public-subnet-a
+        - !ImportValue public-subnet-c
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EC2InstanceLaunchTemplate
+        Version: !GetAtt EC2InstanceLaunchTemplate.LatestVersionNumber #起動テンプレートのバージョン番号
+      DesiredCapacity: !Ref DesiredCapacity
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      TargetGroupARNs:
+        - !Ref TargetGroupArn
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJName}-AutoScalingGroup"
+          PropagateAtLaunch: false
+
+  ScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Condition: SetScalingPolicy
+    Properties:
+      PolicyType: !Ref PolicyType
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: !Ref PredefinedMetricType
+        TargetValue: !Ref TargetValue
+        DisableScaleIn: false
+      # EstimatedInstanceWarmup: 300
+
+
+
+
+Outputs:
+# LaunchTemplate
+  EC2InstanceLaunchTemplate:
+    Value: !Ref EC2InstanceLaunchTemplate
+    Export:
+      Name: !Sub "${PJName}-web1-server"
