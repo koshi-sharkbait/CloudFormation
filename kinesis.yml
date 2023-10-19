@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Kinesis Data Stream
+Parameters:
+  # Kinesis Data Streams
+  KinesisDataStreamName:
+    Type: String
+  StreamMode:
+    Type: String
+    Description: "PROVISIONED | ON_DEMAND"
+    Default: PROVISIONED
+
+  # Kinesis Data Firehose
+  KinesisFirehoseDeliveryStreamName:
+    Type: String
+    Default: SampleDeliveryStream
+  DeliveryStreamType:
+    Type: String
+    Description: "DirectPut | KinesisStreamAsSource | MSKAsSource"
+    Default: KinesisStreamAsSource
+  CompressionFormat: #データの圧縮形式
+    Type: String
+    Description: "GZIP | HADOOP_SNAPPY | Snappy | UNCOMPRESSED | ZIP"
+    Default: UNCOMPRESSED #圧縮しない
+  # LogGroup:
+  #   Type: String
+  # LogStream:
+  #   Type: String
+
+# Lambda
+  Architecture:
+    Type: String
+    Description: "arm64 | x86_64"
+    Default: x86_64
+  Runtime:
+    Type: String
+    Default: python3.8
+  Handler:
+    Type: String
+    Description: "FileName.FunctionName"
+    Default: index.lambda_handler
+
+
+Resources:
+# ------------------------------------------------------------#
+#  IAM Role
+# ------------------------------------------------------------#
+  # Data Streamsからデータを受信するためのロール
+  KinesisStreamSourceRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - firehose.amazonaws.com
+      Policies:
+        - PolicyName: KinesisStreamSourcePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:GetShardIterator
+                  - kinesis:GetRecords
+                  - kinesis:ListShards
+                Resource:
+                  - !GetAtt KinesisDataStream.Arn
+
+  # S3バケットにデータを送信するために使用するIAMロール
+  KinesisS3DestinationRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Delete
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - firehose.amazonaws.com
+      Policies:
+        - PolicyName: KinesisS3DestinationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  -  "*"
+              # - Effect: Allow
+              #   Action:
+              #     - logs:PutLogEvents
+              #   Resource:
+              #     - !GetAtt LogGroup.Arn
+
+ # Lambdaから Kinesis Data Streamsにアクセスするためのロール
+  DataSourceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: DataSourceLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                Resource:
+                  - !GetAtt KinesisDataStream.Arn
+
+
+
+# ------------------------------------------------------------#
+#  Kinesis Data Stream
+# ------------------------------------------------------------#
+  KinesisDataStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Ref KinesisDataStreamName
+      RetentionPeriodHours: 24
+      ShardCount: 1
+      StreamModeDetails:
+        StreamMode: !Ref StreamMode
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+      Tags:
+        - Key: Name
+          Value: !Ref KinesisDataStreamName
+
+
+
+# ------------------------------------------------------------#
+#  Kinesis Data Firehose
+# ------------------------------------------------------------#
+  KinesisFirehoseDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Ref KinesisFirehoseDeliveryStreamName
+      DeliveryStreamType: !Ref DeliveryStreamType
+      KinesisStreamSourceConfiguration: # Kinesis Data Streamからのデータを指定
+        KinesisStreamARN: !GetAtt KinesisDataStream.Arn
+        RoleARN: !GetAtt KinesisStreamSourceRole.Arn
+      S3DestinationConfiguration:
+        CompressionFormat: !Ref CompressionFormat
+        BucketARN: !ImportValue DeliveryFromKinesisBucketArn
+        RoleARN: !GetAtt KinesisS3DestinationRole.Arn
+        # CloudWatchLoggingOptions:
+        #   Enabled: true
+        #   LogGroupName: !Ref LogGroup
+        #   LogStreamName: !Ref LogStream
+        # Prefix: firehose/
+
+
+
+# ------------------------------------------------------------#
+#  Lambda
+# ------------------------------------------------------------#
+  DataSourceLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: Deliver-to-S3-from-Kinesis
+      Architectures:
+        - !Ref Architecture
+      Environment: #環境変数
+        Variables:
+          KINESIS_STREAM_NAME: !Ref KinesisDataStreamName
+      Handler: !Ref Handler
+      Role: !GetAtt DataSourceLambdaRole.Arn
+      Runtime: !Ref Runtime
+      Code:
+        ZipFile: |
+          import boto3
+          import datetime
+          import json
+          import os
+          import random
+
+          STREAM_NAME = os.environ['KINESIS_STREAM_NAME']
+          LIMIT = 10
+
+          def get_data():
+            return {
+              'EVENT_TIME': datetime.datetime.now().isoformat(),
+              'TICKER': random.choice(['AAPL', 'AMZN', 'MSFT', 'INTC', 'TBV']),
+              'PRICE': round(random.random() * 100, 2)}
+
+          def generate(stream_name, kinesis_client, limit):
+            for i in range(limit):
+              data = get_data()
+              print(data)
+              kinesis_client.put_record(
+                StreamName=stream_name,
+                Data=json.dumps(data).encode('utf-8'),
+                PartitionKey="partitionkey")
+
+          def lambda_handler(event, context):
+            generate(STREAM_NAME, boto3.client('kinesis'), LIMIT)
+
+
+
+Outputs:
+  KinesisDataStream:
+    Value: !Ref KinesisDataStream
+    Export:
+      Name: KinesisDataStream
