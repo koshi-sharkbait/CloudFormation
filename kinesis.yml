@@ -1,5 +1,26 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Kinesis Data Stream
+Metadata:
+    "AWS::CloudFormation::Interface":
+      ParameterGroups:
+        - Label:
+            default: Kinesis Data Streams
+          Parameters:
+            - KinesisDataStreamName
+            - StreamMode
+        - Label:
+            default: Kinesis Data Firehose
+          Parameters:
+            - KinesisFirehoseDeliveryStreamName
+            - DeliveryStreamType
+            - CompressionFormat
+        - Label:
+            default: Lambda
+          Parameters:
+            - Architecture
+            - Runtime
+            - Handler
+            
 Parameters:
   # Kinesis Data Streams
   KinesisDataStreamName:
